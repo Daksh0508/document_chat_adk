@@ -1,0 +1,28 @@
+[project]
+name = "doc-chatbot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Daksh", email = "dakshbhardwaj585@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb>=1.5.9",
+    "dotenv>=0.9.9",
+    "fastapi>=0.141.1",
+    "google-adk>=2.10.0",
+    "google-genai>=2.26.0",
+    "pypdf>=6.19.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+doc-chatbot = "doc_chatbot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

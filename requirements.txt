@@ -1,0 +1,9 @@
+# Versions pinned to the ones this project was tested with, so a rebuild next month
+# installs the same libraries instead of whatever is newest that day.
+google-adk==2.10.0
+chromadb==1.5.9
+pypdf==6.19.0
+python-dotenv==1.2.4
+fastapi==0.141.1
+uvicorn==0.54.0
+python-multipart==0.0.32

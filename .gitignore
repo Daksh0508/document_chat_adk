@@ -1,0 +1,22 @@
+# ---- secrets: never upload these ----
+.env
+**/.env
+
+# ---- Python environment and caches ----
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ---- data created while the app runs ----
+uploads/
+chroma_db/
+localdata/
+.adk/
+
+# ---- editor / system files ----
+.vscode/
+.DS_Store
+Thumbs.db

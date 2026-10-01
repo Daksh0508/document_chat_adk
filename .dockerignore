@@ -1,0 +1,17 @@
+# secrets and local data must never go into the image
+.env
+**/.env
+venv/
+.venv/
+uploads/
+chroma_db/
+
+# not needed to run the app
+.git/
+.github/
+tests/
+eval/
+sample_pdfs/
+**/__pycache__/
+*.pyc
+.pytest_cache/
