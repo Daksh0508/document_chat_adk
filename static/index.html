@@ -102,6 +102,12 @@
   .tab:hover { color: var(--text); background: rgba(255, 255, 255, .05); }
   .tab[aria-selected="true"] { color: var(--text); background: rgba(91, 140, 255, .15); border-color: rgba(91, 140, 255, .42); }
 
+  .tabwrap { flex: none; display: flex; align-items: center; }
+  .tabx {
+    margin-left: -4px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: transparent;
+    color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; transition: background .25s, color .25s;
+  }
+  .tabx:hover { background: rgba(255, 123, 138, .18); color: var(--err); }
   .tools { display: flex; align-items: center; gap: 4px; color: var(--muted); font: 400 12px 'JetBrains Mono', ui-monospace, monospace; }
   .tools .count { min-width: 58px; text-align: center; color: var(--text); }
   .tools button {
@@ -377,7 +383,7 @@
       <label class="empty" id="empty" for="file">
         <svg viewBox="0 0 24 24" fill="none" stroke="url(#g)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 14h6M10 17h4"/></svg>
         <h2>Drop a PDF here</h2>
-        <p>Or press the + button in the message box. Text-based PDFs work best; scanned pages can't be read yet.</p>
+        <p>Or press the + button in the message box. Your files stay private to this browser. Text-based PDFs work best; scanned pages can't be read yet.</p>
       </label>
       <div class="pages" id="pages"></div>
       <div class="indexing" id="indexing" aria-live="polite">
@@ -465,6 +471,9 @@ const state = {
   docs: [],            // file names that can be shown in the viewer
   busy: false,
   uploadsEnabled: true,   // the server can turn uploads off (public demo)
+  mine: [],            // the documents this visitor uploaded (and may remove)
+  maxDocs: 5,
+  ttlHours: 24,
   highlights: {},      // { docName: { pageNumber: [{ text, score }] } }
   focus: null,         // { doc, page } scroll target once highlights are drawn
   zoom: 1,
@@ -472,6 +481,24 @@ const state = {
 let viewer = null;     // { doc, pdf, scale, pageEls, observer, builtWidth }
 let openToken = 0;
 const pdfCache = new Map();
+
+/* Each browser gets a random private ID. The server keeps your uploads in a folder only this ID can open. */
+function newId() {
+  const raw = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  return raw.replace(/[^A-Za-z0-9_-]/g, '');
+}
+const VISITOR_ID = (() => {
+  try {
+    let id = localStorage.getItem('docchat_visitor');
+    if (!id) { id = newId(); localStorage.setItem('docchat_visitor', id); }
+    return id;
+  } catch (err) { return newId(); }          // storage blocked: the ID lasts until the tab closes
+})();
+function api(url, opts = {}) {
+  const headers = Object.assign({}, opts.headers, { 'X-Visitor-Id': VISITOR_ID });
+  return fetch(url, Object.assign({}, opts, { headers }));
+}
 
 /* =====================================================================
    Pure helpers (no DOM): text matching, citation parsing, source picking
@@ -593,7 +620,7 @@ function showView(v) {
    ===================================================================== */
 async function loadPdf(name) {
   if (pdfCache.has(name)) return pdfCache.get(name);
-  const pdf = await pdfjsLib.getDocument({ url: '/files/' + encodeURIComponent(name) }).promise;
+  const pdf = await pdfjsLib.getDocument({ url: '/files/' + encodeURIComponent(name), httpHeaders: { 'X-Visitor-Id': VISITOR_ID } }).promise;
   pdfCache.set(name, pdf);
   return pdf;
 }
@@ -801,6 +828,8 @@ function renderTabs() {
     return;
   }
   for (const d of state.docs) {
+    const wrap = document.createElement('span');
+    wrap.className = 'tabwrap';
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'tab';
@@ -809,7 +838,47 @@ function renderTabs() {
     b.textContent = d;
     b.title = d;
     b.addEventListener('click', () => openDoc(d));
-    tabs.appendChild(b);
+    wrap.appendChild(b);
+    if (state.mine.includes(d)) {                       // sample documents cannot be removed
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'tabx';
+      x.textContent = '\u00d7';
+      x.title = 'Remove this document';
+      x.setAttribute('aria-label', 'Remove ' + d);
+      x.addEventListener('click', () => removeDoc(d));
+      wrap.appendChild(x);
+    }
+    tabs.appendChild(wrap);
+  }
+}
+
+function closeViewer() {
+  if (viewer) viewer.observer.disconnect();
+  viewer = null;
+  $('pages').innerHTML = '';
+  $('viewer').classList.remove('has-doc');
+  updatePageInfo();
+}
+
+async function removeDoc(name) {
+  if (!window.confirm('Remove ' + name + '? Its indexed text is deleted too.')) return;
+  try {
+    const res = await api('/documents/' + encodeURIComponent(name), { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Could not remove the document.');
+    pdfCache.delete(name);
+    state.docs = state.docs.filter((d) => d !== name);
+    state.mine = state.mine.filter((d) => d !== name);
+    delete state.highlights[name];
+    if (viewer && viewer.doc === name) {
+      closeViewer();
+      if (state.docs.length) await openDoc(state.docs[0]);
+    }
+    renderTabs();
+    toast(name + ' removed.', 'success');
+  } catch (err) {
+    toast(err.message || 'Could not remove the document.', 'error');
   }
 }
 
@@ -861,11 +930,12 @@ async function uploadFile(file) {
   const form = new FormData();
   form.append('file', file);
   try {
-    const res = await fetch('/upload', { method: 'POST', body: form });
+    const res = await api('/upload', { method: 'POST', body: form });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Upload failed. Try again.');
     pdfCache.delete(data.file);
     if (!state.docs.includes(data.file)) state.docs.push(data.file);
+    if (!state.mine.includes(data.file)) state.mine.push(data.file);
     await openDoc(data.file, true);
     toast(data.file + ' indexed: ' + data.chunks + ' passages ready.', 'success');
   } catch (err) {
@@ -1018,7 +1088,7 @@ async function ask(text) {
   const bot = addThinking();
 
   try {
-    const res = await fetch('/ask', {
+    const res = await api('/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: text, session_id: state.sessionId }),
@@ -1130,9 +1200,10 @@ async function waitForDocs() {
   for (let i = 0; i < 36 && !state.docs.length; i++) {      // about 3 minutes
     await new Promise((r) => setTimeout(r, 5000));
     try {
-      const data = await (await fetch('/documents')).json();
-      if (data.documents && data.documents.length) {
+      const data = await (await api('/documents')).json();
+      if (data.documents && data.documents.length && !state.docs.length) {
         state.docs = data.documents;
+        state.mine = data.mine || [];
         renderTabs();
         await openDoc(state.docs[0]);
       }
@@ -1140,12 +1211,18 @@ async function waitForDocs() {
   }
 }
 
+/* privacy note shown when visitors can upload */
+function applyPrivacyNote() {
+  const h = state.ttlHours;
+  $('fine').textContent = 'Your uploads are private to this browser and deleted after ' + (h === 1 ? '1 hour' : h + ' hours') + '. Their text is sent to Google\'s Gemini API, so don\'t upload confidential files.';
+}
+
 /* start up */
 // Free hosting puts the server to sleep when idle. Keep trying for about two minutes while it wakes.
 async function connect() {
   for (let attempt = 0; attempt < 24; attempt++) {
     try {
-      const res = await fetch('/documents');
+      const res = await api('/documents');
       if (res.ok) return await res.json();
     } catch (err) { /* not reachable yet */ }
     $('status').className = 'status';
@@ -1162,15 +1239,18 @@ async function connect() {
   const data = await connect();
   if (data) {
     state.docs = data.documents || [];
+    state.mine = data.mine || [];
+    state.maxDocs = data.max_docs || 5;
+    state.ttlHours = data.ttl_hours || 24;
     state.uploadsEnabled = data.uploads_enabled !== false;
     setStatus(true);
   } else {
     setStatus(false);
   }
-  if (!state.uploadsEnabled) applyDemoMode();
+  if (!state.uploadsEnabled) applyDemoMode(); else applyPrivacyNote();
   renderTabs();
   if (state.docs.length) await openDoc(state.docs[0]);
-  else if (!state.uploadsEnabled) waitForDocs();
+  else waitForDocs();        // sample documents may still be loading on a freshly woken server
 })();
 })();
 </script>
